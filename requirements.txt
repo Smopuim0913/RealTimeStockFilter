@@ -11,6 +11,7 @@ requests>=2.28.0
 # akshare 底层依赖（一般会随 akshare 自动安装，显式列出以防遗漏）
 lxml>=4.9
 beautifulsoup4>=4.11
+python-dotenv>=1.0
 
 # 可选：页面自动刷新（若 app.py 用到 streamlit-autorefresh 则取消下一行注释）
 # streamlit-autorefresh>=1.0
