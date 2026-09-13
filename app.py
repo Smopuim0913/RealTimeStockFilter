@@ -45,37 +45,37 @@ COLUMNS: List[Dict] = [
     {"key": "net_small",   "label": "小单净额", "width_chars": 8,  "decimals": 2,   "align": "right", "group": "资金"},
     {"key": "ddx1",        "label": "当日DDX", "width_chars": 7,  "decimals": 2,   "align": "right", "group": "DDX"},
     # 当日主力增仓%: 拆成 自由流通市值口径(主) + 成交额口径(辅) 两列
-    {"key": "main_pos1",     "label": "当日增仓%自由", "width_chars": 11, "decimals": 2, "align": "right", "group": "DDX"},
-    {"key": "main_pos1_amt", "label": "当日增仓%金额", "width_chars": 11, "decimals": 2, "align": "right", "group": "DDX"},
+    {"key": "main_pos1",     "label": "当日增仓%自由流通市值", "width_chars": 11, "decimals": 2, "align": "right", "group": "DDX"},
+    {"key": "main_pos1_amt", "label": "当日增仓%总金额", "width_chars": 11, "decimals": 2, "align": "right", "group": "DDX"},
     {"key": "in_out_ratio","label": "内外比",  "width_chars": 6,  "decimals": 2,    "align": "right", "group": "盘口"},
     {"key": "vol_ratio",   "label": "量比",   "width_chars": 5,  "decimals": 2,    "align": "right", "group": "盘口"},
     {"key": "turn",        "label": "换手率%", "width_chars": 7,  "decimals": 2,    "align": "right", "group": "盘口"},
-    {"key": "amount",      "label": "成交金额亿", "width_chars": 8, "decimals": 2,  "align": "right", "group": "盘口"},
+    {"key": "amount",      "label": "总金额(亿)", "width_chars": 8, "decimals": 2,  "align": "right", "group": "盘口"},
     {"key": "chg5",        "label": "5日涨幅%", "width_chars": 8, "decimals": 2,   "align": "right", "group": "阶段"},
     {"key": "ddx5",        "label": "5日DDX",  "width_chars": 7,  "decimals": 2,   "align": "right", "group": "阶段"},
     # 5日: 拆两列
-    {"key": "main_pos5",     "label": "5日增仓%自由", "width_chars": 11, "decimals": 2, "align": "right", "group": "阶段"},
-    {"key": "main_pos5_amt", "label": "5日增仓%金额", "width_chars": 11, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos5",     "label": "5日增仓%自由流通市值", "width_chars": 11, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos5_amt", "label": "5日增仓%总金额", "width_chars": 11, "decimals": 2, "align": "right", "group": "阶段"},
     {"key": "chg10",       "label": "10日涨幅%", "width_chars": 9, "decimals": 2,  "align": "right", "group": "阶段"},
     {"key": "ddx10",       "label": "10日DDX", "width_chars": 8,  "decimals": 2,   "align": "right", "group": "阶段"},
     # 10日: 拆两列
-    {"key": "main_pos10",     "label": "10日增仓%自由", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
-    {"key": "main_pos10_amt", "label": "10日增仓%金额", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos10",     "label": "10日增仓%自由流通市值", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos10_amt", "label": "10日增仓%总金额", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
     {"key": "chg20",       "label": "20日涨幅%", "width_chars": 9, "decimals": 2,  "align": "right", "group": "阶段"},
     {"key": "ddx20",       "label": "20日DDX", "width_chars": 8,  "decimals": 2,   "align": "right", "group": "阶段"},
     # 20日: 拆两列
-    {"key": "main_pos20",     "label": "20日增仓%自由", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
-    {"key": "main_pos20_amt", "label": "20日增仓%金额", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos20",     "label": "20日增仓%自由流通市值", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
+    {"key": "main_pos20_amt", "label": "20日增仓%总金额", "width_chars": 12, "decimals": 2, "align": "right", "group": "阶段"},
     {"key": "chg60",       "label": "60日涨幅%", "width_chars": 9, "decimals": 2,  "align": "right", "group": "阶段"},
     {"key": "chg_yy",      "label": "近一年涨幅%", "width_chars": 10, "decimals": 2, "align": "right", "group": "阶段"},
-    {"key": "total_mv",    "label": "总市值亿", "width_chars": 8,  "decimals": 2,   "align": "right", "group": "估值"},
-    {"key": "circ_mv",     "label": "流通市值亿", "width_chars": 9, "decimals": 2,  "align": "right", "group": "估值"},
+    {"key": "total_mv",    "label": "总市值(亿)", "width_chars": 8,  "decimals": 2,   "align": "right", "group": "估值"},
+    {"key": "circ_mv",     "label": "流通市值(亿)", "width_chars": 9, "decimals": 2,  "align": "right", "group": "估值"},
     {"key": "pb",          "label": "市净率",  "width_chars": 6,  "decimals": 2,    "align": "right", "group": "估值"},
-    {"key": "pe_static",   "label": "PE静",    "width_chars": 7,  "decimals": 2,    "align": "right", "group": "估值"},
+    {"key": "pe_static",   "label": "PE(静)",    "width_chars": 7,  "decimals": 2,    "align": "right", "group": "估值"},
     {"key": "pe_ttm",      "label": "PE(TTM)", "width_chars": 8,  "decimals": 2,    "align": "right", "group": "估值"},
-    {"key": "pe_dyn",      "label": "PE动",    "width_chars": 6,  "decimals": 2,    "align": "right", "group": "估值"},
-    {"key": "profit_yoy",  "label": "净利润同比%", "width_chars": 10, "decimals": 2, "align": "right", "group": "财务"},
-    {"key": "rev_yoy",     "label": "营业收入同比%", "width_chars": 11, "decimals": 2, "align": "right", "group": "财务"},
+    {"key": "pe_dyn",      "label": "PE(动)",    "width_chars": 6,  "decimals": 2,    "align": "right", "group": "估值"},
+    {"key": "profit_yoy",  "label": "利润同比%", "width_chars": 10, "decimals": 2, "align": "right", "group": "财务"},
+    {"key": "rev_yoy",     "label": "营收同比%", "width_chars": 11, "decimals": 2, "align": "right", "group": "财务"},
     {"key": "roe",         "label": "净资产收益率%", "width_chars": 11, "decimals": 2, "align": "right", "group": "财务"},
     {"key": "gross_margin","label": "毛利率%",  "width_chars": 8,  "decimals": 2,   "align": "right", "group": "财务"},
     {"key": "debt_ratio",  "label": "资产负债率%", "width_chars": 10, "decimals": 2, "align": "right", "group": "财务"},
@@ -265,18 +265,36 @@ STRENGTH_RANK = {"strong": 5, "mid_strong": 4, "mid": 3, "mid_weak": 2, "weak": 
 
 # 默认参数: 宽松优先, 保证有结果, 用户再逐步收紧
 DEFAULT_PARAMS = {
-    "price_max": 1000, "in_out_ratio_max": 5.0, "vol_ratio_min": 0.0, "turn_min": 0.0, "amount_min": 0.0,
-    "ddx1_min": -10.0, "ddx5_min": -10.0, "ddx10_min": -10.0, "ddx20_min": -10.0,
+    "price_max": 50,
+    "in_out_ratio_max": 1.0,
+    "vol_ratio_min": 1.0,
+    "turn_min": 0.33,
+    "amount_min": 0.0,
+    "ddx1_min": -1.0,
+    "ddx5_min": -1.0,
+    "ddx10_min": -1.0,
+    "ddx20_min": -1.0,
     # 主力增仓% 双口径阈值 (自由流通市值口径=主, 成交额口径=辅), n日
     # 默认 0.0: "主力增仓"语义上应为正值 (>0 表示净流入/增仓), 放宽可拖到负数
-    "main_pos1_free_min": 0.0, "main_pos1_amt_min": 0.0,
-    "main_pos5_free_min": 0.0, "main_pos5_amt_min": 0.0,
-    "main_pos10_free_min": 0.0, "main_pos10_amt_min": 0.0,
-    "main_pos20_free_min": 0.0, "main_pos20_amt_min": 0.0,
-    "circ_mv_min": 100, "pb_max": 100.0,
-    "pe_dyn_max": 500.0, "pe_static_max": 500.0, "pe_ttm_max": 500.0,
-    "pe_dyn_static_ratio_max": 5.0, "pe_dyn_ttm_ratio_max": 5.0,
-    "roe_min": -100.0, "debt_ratio_max": 100.0, "div_yield_min": 0.0, "peg_max": 10.0,
+    "main_pos1_free_min": -1.0,
+    "main_pos1_amt_min": -10.0,
+    "main_pos5_free_min": -1.0,
+    "main_pos5_amt_min": -10.0,
+    "main_pos10_free_min": -1.0,
+    "main_pos10_amt_min": -10.0,
+    "main_pos20_free_min": -1.0,
+    "main_pos20_amt_min": -10.0,
+    "circ_mv_min": 100,
+    "pb_max": 100.0,
+    "pe_static_max": 500.0,
+    "pe_ttm_max": 500.0,
+    "pe_dyn_max": 500.0,
+    "pe_dyn_static_ratio_max": 1.0,
+    "pe_dyn_ttm_ratio_max": 1.0,
+    "peg_max": 1.0,
+    "roe_min": 0.0,
+    "debt_ratio_max": 80.0,
+    "div_yield_min": 0.0,
     "max_cycle_strength": "mid_weak",
     "excluded_sw_l2": ["煤炭开采", "石油开采", "工业金属"],
 }
@@ -384,15 +402,15 @@ def diagnose(snapshot: List[Dict], params: Dict) -> Dict[str, int]:
             ("10日DDX", r["ddx10"] > params["ddx10_min"]),
             ("20日DDX", r["ddx20"] > params["ddx20_min"]),
             # 增仓% 自由流通市值口径
-            ("当日增仓%自由", (r.get("main_pos1", 0) or 0) > params.get("main_pos1_free_min", -99)),
-            ("5日增仓%自由", (r.get("main_pos5", 0) or 0) > params.get("main_pos5_free_min", -99)),
-            ("10日增仓%自由", (r.get("main_pos10", 0) or 0) > params.get("main_pos10_free_min", -99)),
-            ("20日增仓%自由", (r.get("main_pos20", 0) or 0) > params.get("main_pos20_free_min", -99)),
+            ("当日增仓%自由流通市值", (r.get("main_pos1", 0) or 0) > params.get("main_pos1_free_min", -99)),
+            ("5日增仓%自由流通市值", (r.get("main_pos5", 0) or 0) > params.get("main_pos5_free_min", -99)),
+            ("10日增仓%自由流通市值", (r.get("main_pos10", 0) or 0) > params.get("main_pos10_free_min", -99)),
+            ("20日增仓%自由流通市值", (r.get("main_pos20", 0) or 0) > params.get("main_pos20_free_min", -99)),
             # 增仓% 成交额口径 (None=开盘未就绪, 不淘汰)
-            ("当日增仓%金额", r.get("main_pos1_amt") is None or r["main_pos1_amt"] > params.get("main_pos1_amt_min", -99)),
-            ("5日增仓%金额", r.get("main_pos5_amt") is None or r["main_pos5_amt"] > params.get("main_pos5_amt_min", -99)),
-            ("10日增仓%金额", r.get("main_pos10_amt") is None or r["main_pos10_amt"] > params.get("main_pos10_amt_min", -99)),
-            ("20日增仓%金额", r.get("main_pos20_amt") is None or r["main_pos20_amt"] > params.get("main_pos20_amt_min", -99)),
+            ("当日增仓%总金额", r.get("main_pos1_amt") is None or r["main_pos1_amt"] > params.get("main_pos1_amt_min", -99)),
+            ("5日增仓%总金额", r.get("main_pos5_amt") is None or r["main_pos5_amt"] > params.get("main_pos5_amt_min", -99)),
+            ("10日增仓%总金额", r.get("main_pos10_amt") is None or r["main_pos10_amt"] > params.get("main_pos10_amt_min", -99)),
+            ("20日增仓%总金额", r.get("main_pos20_amt") is None or r["main_pos20_amt"] > params.get("main_pos20_amt_min", -99)),
             ("量比", r["vol_ratio"] > params["vol_ratio_min"]),
             ("换手率", r["turn"] >= params["turn_min"]),
             ("成交金额", r["amount"] >= params["amount_min"]),
@@ -499,48 +517,48 @@ def main():
         st.title("筛选条件")
 
         st.subheader("行情")
-        price_max = st.number_input("股价上限 (元)", 1, 1000, 1000)
-        in_out_ratio_max = st.number_input("内外比 <", 0.0, 5.0, 5.0, 0.1)
-        vol_ratio_min = st.number_input("量比 >", 0.0, 10.0, 0.0, 0.1)
-        turn_min = st.number_input("换手率% >", 0.0, 100.0, 0.0, 0.1)
-        amount_min = st.number_input("成交金额(亿) >", 0.0, 1000.0, 0.0, 0.5)
+        price_max = st.number_input("股价小于(元)", 1, 5000, 50)
+        in_out_ratio_max = st.number_input("内外比小于", 0.0, 5.0, 1.0, 0.1)
+        vol_ratio_min = st.number_input("量比大于", 0.0, 10.0, 1.0, 0.1)
+        turn_min = st.number_input("换手率大于%", 0.0, 20.0, 0.33, 0.1)
+        amount_min = st.number_input("总金额大于(亿)", 0.0, 1000.0, 0.0, 0.5)
 
         st.subheader("DDX / 主力增仓%")
-        ddx1_min = st.number_input("当日DDX >", -10.0, 10.0, -10.0, 0.1)
-        ddx5_min = st.number_input("5日DDX >", -10.0, 10.0, -10.0, 0.1)
-        ddx10_min = st.number_input("10日DDX >", -10.0, 10.0, -10.0, 0.1)
-        ddx20_min = st.number_input("20日DDX >", -10.0, 10.0, -10.0, 0.1)
+        ddx1_min = st.number_input("当日DDX大于", -10.0, 10.0, -1.0, 0.1)
+        ddx5_min = st.number_input("5日DDX大于", -10.0, 10.0, -1.0, 0.1)
+        ddx10_min = st.number_input("10日DDX大于", -10.0, 10.0, -1.0, 0.1)
+        ddx20_min = st.number_input("20日DDX大于", -10.0, 10.0, -1.0, 0.1)
 
         # ---- n日主力增仓%: 双口径阈值 (自由流通市值口径 主 / 成交额口径 辅) ----
         # 口径A = 主力净额 / 自由流通市值 * 100  (跨市值可比, 主指标, 用于筛选排序)
         # 口径B = 主力净额 / 当日总成交额 * 100  (看主力当天主导力, 辅指标)
         # 成交额口径开盘初期(成交额=0)自动为 None, 不参与淘汰 (= 逐步入围)
         st.markdown("**主力增仓% — 自由流通市值口径** *(主, 跨市值可比)*")
-        main_pos1_free_min = st.slider("当日增仓%自由 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos5_free_min = st.slider("5日增仓%自由 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos10_free_min = st.slider("10日增仓%自由 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos20_free_min = st.slider("20日增仓%自由 >", -10.0, 10.0, 0.0, 0.1)
+        main_pos1_free_min = st.slider("当日增仓%自由流通市值大于", -10.0, 10.0, -1.0, 0.1)
+        main_pos5_free_min = st.slider("5日增仓%自由流通市值大于", -10.0, 10.0, -1.0, 0.1)
+        main_pos10_free_min = st.slider("10日增仓%自由流通市值大于", -10.0, 10.0, -1.0, 0.1)
+        main_pos20_free_min = st.slider("20日增仓%自由流通市值大于", -10.0, 10.0, -1.0, 0.1)
         st.markdown("**主力增仓% — 成交额口径** *(辅, 看主力主导力; 开盘未就绪不淘汰)*")
-        main_pos1_amt_min = st.slider("当日增仓%金额 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos5_amt_min = st.slider("5日增仓%金额 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos10_amt_min = st.slider("10日增仓%金额 >", -10.0, 10.0, 0.0, 0.1)
-        main_pos20_amt_min = st.slider("20日增仓%金额 >", -10.0, 10.0, 0.0, 0.1)
+        main_pos1_amt_min = st.slider("当日增仓%总金额大于", -10.0, 10.0, -10.0, 0.1)
+        main_pos5_amt_min = st.slider("5日增仓%总金额大于", -10.0, 10.0, -10.0, 0.1)
+        main_pos10_amt_min = st.slider("10日增仓%总金额大于", -10.0, 10.0, -10.0, 0.1)
+        main_pos20_amt_min = st.slider("20日增仓%总金额大于", -10.0, 10.0, -10.0, 0.1)
 
         st.subheader("市值 / 估值")
-        circ_mv_min = st.number_input("流通市值(亿) >", 0, 100000, 100)
-        pb_max = st.number_input("市净率 <", 0.0, 100.0, 100.0, 0.5)
-        pe_dyn_max = st.number_input("动态PE < (均值)", 0.0, 500.0, 500.0, 1.0)
-        pe_static_max = st.number_input("静态PE < (均值)", 0.0, 500.0, 500.0, 1.0)
-        pe_ttm_max = st.number_input("TTM PE < (均值)", 0.0, 500.0, 500.0, 1.0)
-        pe_dyn_static_ratio = st.number_input("动态PE/静态PE <", 0.0, 5.0, 5.0, 0.1)
-        pe_dyn_ttm_ratio = st.number_input("动态PE/TTM <", 0.0, 5.0, 5.0, 0.1)
+        circ_mv_min = st.number_input("流通市值大于(亿)", 0, 10000, 5)
+        pb_max = st.number_input("市净率小于", 0.0, 1000.0, 10.0, 0.5)
+        pe_static_max = st.number_input("静态PE小于", 0.0, 10000.0, 10000.0, 1.0)
+        pe_ttm_max = st.number_input("TTM PE小于", 0.0, 1000.0, 1000.0, 1.0)
+        pe_dyn_max = st.number_input("动态PE小于", 0.0, 500.0, 500.0, 1.0)
+        pe_dyn_static_ratio = st.number_input("动态PE/静态PE小于", 0.0, 5.0, 1.0, 0.1)
+        pe_dyn_ttm_ratio = st.number_input("动态PE/TTM PE小于", 0.0, 5.0, 1.0, 0.1)
 
         st.subheader("财务")
-        roe_min = st.number_input("ROE% >", -100.0, 100.0, -100.0, 0.5)
-        debt_ratio_max = st.number_input("资产负债率% <", 0.0, 100.0, 100.0, 1.0)
-        div_yield_min = st.number_input("股息率% >", 0.0, 50.0, 0.0, 0.1)
-        peg_max = st.number_input("PEG <", 0.0, 10.0, 10.0, 0.1)
-
+        peg_max = st.number_input("PEG小于", 0.0, 10.0, 1.0, 0.1)
+        roe_min = st.number_input("ROE%大于", -100.0, 100.0, 0.0, 0.5)
+        debt_ratio_max = st.number_input("资产负债率%小于", 0.0, 100.0, 80.0, 1.0)
+        div_yield_min = st.number_input("股息率%大于", 0.0, 50.0, 0.0, 0.1)
+        
         st.subheader("周期股过滤")
         max_cycle = st.select_slider(
             "最大允许周期强度",
@@ -555,7 +573,7 @@ def main():
             default=["煤炭开采", "石油开采", "工业金属"],
         )
 
-        refresh_rate = st.selectbox("刷新间隔", [1, 3, 5, 10], index=1)
+        refresh_rate = st.selectbox("刷新间隔", [1, 3, 5, 10, 15, 20, 30], index=3)
 
     # 组装参数
     params = {
