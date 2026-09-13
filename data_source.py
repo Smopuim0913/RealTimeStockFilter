@@ -1,26 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-data_source.py —— 可插拔双模数据源（对齐 app.py 调用签名）
+可插拔数据源：真实(TuShare) / Mock 模拟，自动降级 + 本地缓存(规避 1次/小时限流)
+=====================================================================
+设计：
+  - 有 TUSHARE_TOKEN 且 tushare 可用 -> use_real=True，尝试取真实数据
+  - 取不到(积分不足/限流/异常) -> 自动降级 Mock，并在 ds.error 记录原因
+  - 慢池(pool) 缓存 12h，快照(snapshot) 缓存 5min（cache.py）
+  - 限流期间：用【过期缓存】兜底，保证界面不断流
 
-对外接口（app.py 依赖这些）：
-    ds = DataSource(pool=make_mock_pool(), use_real=None)  # use_real: True/False/None(自动)
-    ds.source            # "Tushare" / "Mock"  (供界面显示)
-    ds.error             # 最近的异常说明（为空=无异常）
-    ds.get_pool()        -> List[Dict]            # 季度慢池（财报级）
-    ds.snapshot(pool)    -> List[Dict] | None     # 盘中快照（None=请降级 mock）
-
-实盘（use_real=True 且 tushare 可用 + 有 token）：
-    慢池: tushare stock_basic + daily_basic  (估值/市值/换手/量比/PE)
-    快照: 最近交易日 daily_basic + moneyflow  (资金流拆分/DDX/内外比近似)
-    财务(ROE/利润同比/毛利率/负债率/股息率): tushare fina_indicator，分批补，失败不致命
-降级：任何一步异常 -> source="Mock"，error 记录原因，snapshot 返回 None 让 app 走 mock。
-
-环境变量：
-    TUSHARE_TOKEN  (必需才进实盘)
-    .env 由 python-dotenv 自动加载（需在项目根放 .env）
-
-内外比: 成交额口径用主动买卖量近似 (buy_*/sell_*_vol)；无数据则 None（逐步入围）。
-主力增仓% 双口径: 自由流通市值口径(主) + 成交额口径(辅)，与 app.py compute_main_positions 口径一致。
+公开接口（供 app.py 调用）：
+    ds = DataSource(pool=mock_pool_list, use_real=None)  # use_real=None 自动判断
+    ds.source        # "Tushare" / "MOCK"
+    ds.error         # "" 或降级原因
+    ds.get_pool() -> list[dict]      # 季度慢池（财报+估值+市值）
+    ds.snapshot(pool) -> list[dict]  # 盘中快照
 """
 import os
 from datetime import datetime, timedelta
@@ -37,10 +30,30 @@ except Exception:
 
 try:
     import tushare as ts
-    HAVE_TUSHARE = True
 except Exception:
     ts = None
-    HAVE_TUSHARE = False
+
+import cache  # 本地缓存
+
+
+# ---------- 工具 ----------
+def _f(v, default=0.0) -> float:
+    """安全转 float（处理 None / nan / 空字符串）"""
+    try:
+        if v is None or v == "" or (isinstance(v, float) and np.isnan(v)):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def _last_open_days(pro, exchange, start, end, n=1) -> Optional[str]:
+    """取最近 n 个交易日的列表（兼容 cal_date / trade_date 列名）"""
+    cal = pro.trade_cal(exchange=exchange, start_date=start, end_date=end, is_open="1")
+    if cal is None or len(cal) == 0:
+        return None
+    col = "cal_date" if "cal_date" in cal.columns else "trade_date"
+    return sorted(cal[col].tolist())[-n:]
 
 
 # 申万一级行业 -> 周期强度（strong/mid_strong/mid/mid_weak/weak/none）
@@ -56,296 +69,313 @@ SW_CYCLE = {
 }
 
 
-def _f(x, default=0.0):
-    """安全转 float，空/异常 -> default"""
-    if x is None:
-        return default
-    try:
-        s = str(x).strip()
-        if s in ("", "-", "--", "None", "NaN", "nan"):
-            return default
-        return float(s)
-    except (ValueError, TypeError):
-        return default
-
-
-def _last_open_days(pro, n=1, end: str = None):
-    """取最近 n 个交易日（按 SSE 日历），自适应列名 cal_date/trade_date"""
-    e = end or datetime.now().strftime("%Y%m%d")
-    s = (datetime.strptime(e, "%Y%m%d") - timedelta(days=120)).strftime("%Y%m%d")
-    cal = pro.trade_cal(exchange="SSE", start_date=s, end_date=e, is_open="1")
-    if cal is None or len(cal) == 0:
-        # 兜底：直接取 end 当天
-        return [e]
-    col = "cal_date" if "cal_date" in cal.columns else "trade_date"
-    days = cal[col].tolist()[::-1]
-    return days[:n]
-
-
+# ==================================================================
+# Mock 数据源（降级兜底，字段结构与真实源完全一致）
+# ==================================================================
 class MockDataSource:
-    """无网络/无 token/实盘失败时的兜底，返回与真实源同 key 的数据，便于本地开发"""
+    """内置模拟数据，保证任何时候界面都有数据可展示"""
 
-    def __init__(self, pool: Optional[List[Dict]] = None):
+    def __init__(self, pool: list = None):
+        self.source = "MOCK"
+        self.error = ""
         self._pool = pool or []
-        self._rng = np.random.default_rng(7)
+        self.tick = 0
+        self._rng = np.random.default_rng(42)
 
-    def snapshot(self, codes):
+    def get_pool(self) -> List[Dict]:
+        return self._pool
+
+    def snapshot(self, pool: List[Dict]) -> List[Dict]:
+        self.tick += 1
+        progress = min(1.0, self.tick / 20.0)
         rows = []
-        for code in codes:
-            # 支持 dict 或 str
-            if isinstance(code, dict):
-                code = code.get("code", "")
-            outer = float(self._rng.integers(10000, 500000))
-            inner = float(self._rng.integers(8000, 400000))
-            price = round(self._rng.uniform(5, 200), 2)
-            amount = round(self._rng.uniform(0.5, 50), 2)
+        for s in pool:
+            noise = self._rng.normal(0, 0.01)
+            price = s["base_price"] * (1 + noise + 0.002 * np.sin(self.tick / 5.0))
+            prev = s["base_price"]
+            chg = (price / prev - 1) * 100 if prev else 0
+            amount = s["base_amount"] * (0.3 + 0.7 * progress)
+            turn = 0.5 + 2.0 * progress
             rows.append({
-                "code": str(code), "name": f"模拟{code}", "price": price,
-                "chg_pct": round(self._rng.uniform(-5, 5), 2),
-                "open": price, "amount": amount,
-                "turn": round(self._rng.uniform(0, 8), 2),
-                "vol_ratio": round(self._rng.uniform(0.3, 3), 2),
-                "volume_lot": outer + inner,
-                "inner_vol": inner, "outer_vol": outer,
-                "in_out_ratio": round(inner / outer, 2),
-                "pb": round(self._rng.uniform(0.5, 10), 2),
-                "pe_static": round(self._rng.uniform(5, 60), 2),
-                "pe_ttm": round(self._rng.uniform(5, 60), 2),
-                "pe_dyn": round(self._rng.uniform(5, 60), 2),
-                "circ_mv": round(self._rng.uniform(50, 10000), 2),
-                "total_mv": round(self._rng.uniform(60, 12000), 2),
-                "free_circ_mv": round(self._rng.uniform(40, 8000), 2),
-                "net_super": round(self._rng.uniform(-5, 5), 2),
-                "net_big": round(self._rng.uniform(-5, 5), 2),
-                "net_mid": round(self._rng.uniform(-5, 5), 2),
-                "net_small": round(self._rng.uniform(-5, 5), 2),
-                "ddx1": round(self._rng.uniform(-2, 2), 2),
-                "profit_yoy": round(self._rng.uniform(-30, 60), 2),
-                "rev_yoy": round(self._rng.uniform(-20, 50), 2),
-                "roe": round(self._rng.uniform(-5, 35), 2),
-                "gross_margin": round(self._rng.uniform(5, 90), 2),
-                "debt_ratio": round(self._rng.uniform(20, 85), 2),
-                "div_yield": round(self._rng.uniform(0, 6), 2),
+                **s,
+                "price": round(price, 2), "chg_pct": round(chg, 2),
+                "speed_3m": round(self._rng.normal(0, 0.5), 2),
+                "main_flow": round(self._rng.normal(0, 2.0), 2),
+                "net_super": round(self._rng.normal(0, 3.0), 2),
+                "net_big": round(self._rng.normal(0, 2.0), 2),
+                "net_mid": round(self._rng.normal(0, 1.5), 2),
+                "net_small": round(self._rng.normal(0, 1.0), 2),
+                "ddx1": round(self._rng.normal(0, 0.3), 2),
+                "in_out_ratio": round(max(0.3, 1.0 + self._rng.normal(0, 0.2)), 2),
+                "vol_ratio": round(max(0.2, 1.0 + self._rng.normal(0, 0.4)), 2),
+                "turn": round(turn, 2), "amount": round(amount, 2),
+                "chg5": round(chg * 0.8 + self._rng.normal(0, 1), 2),
+                "ddx5": round(self._rng.normal(0, 0.5), 2),
+                "net_main5": round(s["net_main5"] * (0.9 + 0.2 * self._rng.random()), 2),
+                "net_main10": round(s["net_main10"] * (0.9 + 0.2 * self._rng.random()), 2),
+                "net_main20": round(s["net_main20"] * (0.9 + 0.2 * self._rng.random()), 2),
+                "chg10": round(chg * 1.2 + self._rng.normal(0, 2), 2),
+                "ddx10": round(self._rng.normal(0, 0.6), 2),
+                "chg20": round(chg * 1.5 + self._rng.normal(0, 3), 2),
+                "ddx20": round(self._rng.normal(0, 0.7), 2),
+                "chg60": round(self._rng.normal(0, 15), 2),
+                "chg_yy": round(self._rng.normal(0, 30), 2),
+                "pb": round(s["pb"] * (price / prev), 2),
+                "pe_static": round(s["pe_static"], 2),
+                "pe_ttm": round(s["pe_ttm"] * (prev / price), 2),
+                "pe_dyn": round(s["pe_dyn"] * (prev / price), 2),
             })
+        # 主力增仓% 双口径
+        for r in rows:
+            net1 = _f(r.get("net_super")) + _f(r.get("net_big"))
+            net5 = _f(r.get("net_main5"), net1 * 3)
+            net10 = _f(r.get("net_main10"), net1 * 6)
+            net20 = _f(r.get("net_main20"), net1 * 10)
+            free = _f(r.get("free_circ_mv")) or _f(r.get("circ_mv"))
+            amt = _f(r.get("amount"))
+            for net, kf, ka in [
+                (net1, "main_pos1", "main_pos1_amt"),
+                (net5, "main_pos5", "main_pos5_amt"),
+                (net10, "main_pos10", "main_pos10_amt"),
+                (net20, "main_pos20", "main_pos20_amt"),
+            ]:
+                r[kf] = round(net / free * 100, 2) if free else None
+                r[ka] = round(net / amt * 100, 2) if amt else None
         return rows
 
-    def fetch_fundamentals(self, codes):
-        # 与 FinancialSource.fetch_fundamentals 同契约
-        out = {}
-        for code in codes:
-            c = code.get("code", "") if isinstance(code, dict) else code
-            out[str(c)] = {
-                "profit_yoy": round(self._rng.uniform(-30, 60), 2),
-                "rev_yoy": round(self._rng.uniform(-20, 50), 2),
-                "roe": round(self._rng.uniform(-5, 35), 2),
-                "gross_margin": round(self._rng.uniform(5, 90), 2),
-                "debt_ratio": round(self._rng.uniform(20, 85), 2),
-                "div_yield": round(self._rng.uniform(0, 6), 2),
-                "ocf_to_np": round(self._rng.uniform(-2, 3), 2),
-                "circ_mv": round(self._rng.uniform(50, 10000), 2),
-                "free_circ_mv": round(self._rng.uniform(40, 8000), 2),
-            }
-        return out
 
-    # 别名，兼容旧调用
-    fetch = snapshot
+# ==================================================================
+# 真实数据源（TuShare）
+# ==================================================================
+class TushareDataSource:
+    """
+    有 token 时自动启用；任何一步失败 -> 降级 Mock + 记录 error。
+    字段以 TuShare 实测为准（你的 token 已验证 stock_basic 可用）。
+    """
 
-
-class DataSource:
-    def __init__(self, pool: Optional[List[Dict]] = None, token: Optional[str] = None,
-                 use_real: Optional[bool] = None, trade_date: Optional[str] = None,
-                 mock_pool_fn=None):
-        self._mock_pool = pool or []
-        self.mock_pool_fn = mock_pool_fn
+    def __init__(self, pool: list = None, token: str = None, trade_date: str = None):
+        self._mock_pool = pool
         self.token = token or os.getenv("TUSHARE_TOKEN", "")
-        # use_real: None=有token且tushare可用就真，否则mock；True/False 强制
-        if use_real is True:
-            self.use_real = True
-        elif use_real is False:
-            self.use_real = False
-        else:
-            self.use_real = bool(self.token) and HAVE_TUSHARE
-        # 无 token 一律 mock，避免无效尝试
-        if self.use_real and not self.token:
-            self.use_real = False
-            self.error = "未配置 TUSHARE_TOKEN，已降级 Mock"
         self.trade_date = trade_date
-        self.source = "Mock"   # 仅在 get_pool/snapshot 真实取数成功后才改为 "Tushare"
         self.pro = None
+        self.source = "MOCK"
         self.error = ""
-        if self.use_real:
-            try:
-                ts.set_token(self.token)
-                self.pro = ts.pro_api()
-                # 探活：取一只股票验证 token 有效
-                self.pro.stock_basic(exchange="", list_status="L",
-                                     fields="ts_code,symbol,name", limit=1)
-            except Exception as e:
-                self.use_real = False
-                self.error = f"tushare init failed: {e}"
+        self._mock = MockDataSource(pool=pool)
 
-    # ==================== ① 季度慢池 ====================
-    def get_pool(self) -> List[Dict]:
-        if not self.use_real or self.pro is None:
-            return self._mock()
+        if not self.token:
+            self.error = "未设置 TUSHARE_TOKEN（.env 中配置）"
+            return
+        if ts is None:
+            self.error = "未安装 tushare（pip install tushare）"
+            return
+
         try:
-            return self._build_pool()
+            ts.set_token(self.token)
+            self.pro = ts.pro_api()
+            # 探活：1次/小时接口，优先读缓存，避免触发限流
+            cached = cache.get_stale("stock_basic")
+            if cached is not None:
+                self.source = "Tushare"
+                return
+            sb = self.pro.stock_basic(exchange="", list_status="L",
+                                      fields="ts_code,symbol,name,industry,market,list_date", limit=1)
+            if sb is None or len(sb) == 0:
+                raise RuntimeError("stock_basic 返回 0 行（token 积分/权限不足）")
+            self.source = "Tushare"
         except Exception as e:
-            self.error = f"get_pool failed: {e}"
-            return self._mock()
+            self.source = "MOCK"
+            self.error = f"tushare 初始化失败：{e}"
+            self.pro = None
 
-    def _mock(self) -> List[Dict]:
-        if self.mock_pool_fn is not None:
-            return self.mock_pool_fn()
-        if self._mock_pool:
-            return self._mock_pool
-        return []
+    # ---------- 慢池（日级，缓存 12h） ----------
+    def get_pool(self) -> List[Dict]:
+        if self.source != "Tushare":
+            return self._mock.get_pool()
+
+        # 优先读缓存（即使过期也先用，避免限流时频繁请求）
+        cached = cache.get("pool")
+        if cached:
+            return cached
+
+        try:
+            pool = self._build_pool()
+            if pool:
+                cache.put("pool", pool)
+                return pool
+            # 取到了但为空 -> 用过期缓存兜底
+            stale = cache.get_stale("pool")
+            if stale:
+                self.error = "本轮慢池为空，使用过期缓存"
+                return stale
+        except Exception as e:
+            self.error = f"慢池构建失败：{e}"
+            stale = cache.get_stale("pool")
+            if stale:
+                return stale
+        return self._mock.get_pool()
 
     def _build_pool(self) -> List[Dict]:
-        basic = self.pro.stock_basic(exchange="", list_status="L",
-                                     fields="ts_code,symbol,name,industry,market,list_date")
+        pro = self.pro
+        # 1) 基础信息（限流：读过期缓存也行）
+        basic = cache.get_stale("stock_basic")
+        if basic is None:
+            basic = pro.stock_basic(exchange="", list_status="L",
+                                    fields="ts_code,symbol,name,industry,market,list_date")
+            if basic is not None and len(basic) > 0:
+                cache.put("stock_basic", basic.to_dict("records"))
         if basic is None or len(basic) == 0:
-            raise RuntimeError(
-                "stock_basic 返回 0 行（token 积分不足或接口未授权，请到 tushare.pro 检查积分）")
-        td = _last_open_days(self.pro, 1)[0]
-        db = self.pro.daily_basic(
-            trade_date=td,
-            fields="ts_code,close,pre_close,pe,pe_ttm,pb,turnover_rate,volume_ratio,"
-                   "total_mv,circ_mv,free_share,amount",
-        )
+            raise RuntimeError("stock_basic 返回 0 行（权限/限流）")
+
+        # 2) 最近交易日估值快照
+        today = datetime.now()
+        start = (today - timedelta(days=90)).strftime("%Y%m%d")
+        end = (today + timedelta(days=1)).strftime("%Y%m%d")
+        days = _last_open_days(pro, "SSE", start, end, n=1)
+        if not days:
+            raise RuntimeError("取不到最近交易日（trade_cal 限流/无权限）")
+        td = days[0]
+
+        db = pro.daily_basic(trade_date=td, fields=(
+            "ts_code,close,pre_close,pe,pe_ttm,pb,turnover_rate,volume_ratio,"
+            "total_mv,circ_mv,free_share,amount"
+        ))
         if db is None or len(db) == 0:
-            raise RuntimeError(
-                f"daily_basic(trade_date={td}) 返回 0 行（{td} 可能非交易日或权限不足）")
-        db = db.merge(basic, on="ts_code", how="inner")
-        out: List[Dict] = []
-        self.source = "Tushare"   # 能跑到这里说明 tushare 调用链通畅
-        for _, r in db.iterrows():
-            code6 = str(r["symbol"])
-            ind = r.get("industry") or ""
-            close = _f(r.get("close"))
-            pre = _f(r.get("pre_close")) or close
-            circ_mv_yi = _f(r.get("circ_mv")) / 1e8         # 千元 -> 亿元
-            free_share = _f(r.get("free_share"))
-            free_mv_yi = (free_share * close / 1e8) if free_share > 0 else circ_mv_yi
-            out.append({
-                "code": code6, "ts_code": r["ts_code"], "name": r.get("name") or code6,
-                "sw_l1": ind, "sw_l2": ind,
-                "cycle": SW_CYCLE.get(ind, "none"),
-                "price": close,
-                "pre_close": pre,
-                "chg_pct": round((close / pre - 1) * 100, 2) if pre > 0 else 0.0,
-                "turn": _f(r.get("turnover_rate")),
-                "vol_ratio": _f(r.get("volume_ratio"), 1.0),
-                "amount": _f(r.get("amount")) / 1e8,      # 千元 -> 亿元
-                "total_mv": _f(r.get("total_mv")) / 1e8,
-                "circ_mv": circ_mv_yi,
-                "free_circ_mv": free_mv_yi,
-                "pb": _f(r.get("pb")),
-                "pe_static": _f(r.get("pe")),
-                "pe_ttm": _f(r.get("pe_ttm")),
-                "pe_dyn": _f(r.get("pe_ttm")),            # 无预测EPS，ttm近似
-                # 财务字段：日频快照没有，下面 _fill_finance 分批补（失败不致命）
-                "profit_yoy": 0.0, "rev_yoy": 0.0, "roe": 0.0,
-                "gross_margin": 0.0, "debt_ratio": 0.0, "div_yield": 0.0,
-            })
-        self._fill_finance(out)
-        return out
-
-    def _fill_finance(self, out: List[Dict]):
-        """按 ts_code 分批拉 fina_indicator，补齐 ROE/利润同比/毛利率/负债率/股息率。
-        低积分/限频会抛异常 -> 捕获后留 0，不阻断。"""
-        if not out:
-            return
-        # 分批，避免单次参数过长
-        codes = [p["ts_code"] for p in out]
-        step = 50
-        for i in range(0, len(codes), step):
-            batch = codes[i:i + step]
-            try:
-                fi = self.pro.fina_indicator(ts_code=",".join(batch))
-            except Exception as e:
-                self.error += f" | fina_indicator batch skipped: {e}"
-                continue
-            if fi is None or len(fi) == 0:
-                continue
-            # 每只取最新一期 (按 end_date 排序)
-            fi = fi.sort_values("end_date", ascending=False)
-            latest = fi.drop_duplicates("ts_code", keep="first")
-            lut = {row["ts_code"]: row for _, row in latest.iterrows()}
-            for p in out:
-                row = lut.get(p["ts_code"])
-                if row is None:
-                    continue
-                p["roe"] = _f(row.get("roe"))
-                p["profit_yoy"] = _f(row.get("yoy_profit"))     # 净利润同比
-                p["rev_yoy"] = _f(row.get("yoy_sales"))         # 营业总收入同比
-                p["gross_margin"] = _f(row.get("grossprofit_margin"))
-                p["debt_ratio"] = _f(row.get("debt_to_assets"))
-
-    # ==================== ② 盘中快照 ====================
-    def snapshot(self, pool: List[Dict]) -> Optional[List[Dict]]:
-        if not self.use_real or self.pro is None:
-            return None
-        try:
-            return self._snapshot(pool)
-        except Exception as e:
-            self.error = f"snapshot failed: {e}"
-            return None
-
-    def _snapshot(self, pool: List[Dict]) -> List[Dict]:
-        td = _last_open_days(self.pro, 1)[0]
-        db = self.pro.daily_basic(
-            trade_date=td,
-            fields="ts_code,close,pre_close,pe,pe_ttm,pb,turnover_rate,volume_ratio,"
-                   "total_mv,circ_mv,free_share,amount,net_mf_vol",
-        )
+            raise RuntimeError(f"daily_basic({td}) 返回 0 行（限流/非交易日）")
         db_idx = {r["ts_code"]: r for _, r in db.iterrows()}
 
-        # 资金流（低积分会空 -> 容错）
-        mf_map: Dict[str, Dict] = {}
+        # 3) 财务（低积分会失败，try 降级 -> 用 0 占位，不阻断主流程）
+        fin_idx = {}
         try:
-            mf = self.pro.moneyflow(
-                trade_date=td,
-                fields="ts_code,buy_sm_vol,buy_sm_amount,sell_sm_vol,sell_sm_amount,"
-                       "buy_md_vol,buy_md_amount,sell_md_vol,sell_md_amount,"
-                       "buy_lg_vol,buy_lg_amount,sell_lg_vol,sell_lg_amount,"
-                       "buy_elg_vol,buy_elg_amount,sell_elg_vol,sell_elg_amount,net_mf_vol",
-            )
-            if mf is not None and len(mf):
-                mf_map = {r["ts_code"]: r for _, r in mf.iterrows()}
+            fin = pro.fina_indicator(period=td[:4] + "Q4" if False else None,
+                                     fields="ts_code,roe,ordinay_profit_yoy,grossprofit_margin,debt_to_assets,dividend_yield_ratio")
+            # 免费积分无权限时直接抛异常 -> 走 except
+            if fin is not None and len(fin) > 0:
+                for _, r in fin.iterrows():
+                    fin_idx[r["ts_code"]] = r
         except Exception as e:
-            self.error += f" | moneyflow skipped: {e}"
+            self.error = f"财务接口降级（{e.__class__.__name__}）"
 
-        rows: List[Dict] = []
-        if pool:
-            self.source = "Tushare"   # 能跑到这里说明 tushare 调用链通畅
+        # 4) 组装（只保留主板，流通市值>100亿 在 app.py 慢池层再过滤更灵活）
+        out = []
+        for _, b in basic.iterrows():
+            ts_code = b["ts_code"]
+            d = db_idx.get(ts_code, {})
+            code6 = str(b.get("symbol") or ts_code[:6])
+            ind = b.get("industry") or ""
+            close = _f(d.get("close"))
+            pre = _f(d.get("pre_close"), close) or close
+            chg = round((close / pre - 1) * 100, 2) if pre > 0 else 0.0
+            free_sh = _f(d.get("free_share"))
+            free_mv = free_sh * close / 1e8 if free_sh > 0 else _f(d.get("circ_mv"))
+            f = fin_idx.get(ts_code, {})
+            out.append({
+                "code": code6, "ts_code": ts_code,
+                "name": b.get("name") or code6,
+                "sw_l1": ind, "sw_l2": ind,
+                "cycle": SW_CYCLE.get(ind, "none"),
+                # 行情
+                "price": close, "chg_pct": chg,
+                "vol_ratio": _f(d.get("volume_ratio"), 1.0),
+                "turn": _f(d.get("turnover_rate")),
+                "amount": _f(d.get("amount")) / 1e8,  # 千元->亿
+                # 市值/估值
+                "total_mv": _f(d.get("total_mv")) / 1e8,
+                "circ_mv": _f(d.get("circ_mv")) / 1e8,
+                "free_circ_mv": free_mv,
+                "pb": _f(d.get("pb")),
+                "pe_static": _f(d.get("pe")),
+                "pe_ttm": _f(d.get("pe_ttm")),
+                "pe_dyn": _f(d.get("pe_ttm")),  # 无预测EPS，用TTM近似
+                # 财务（低积分=0占位）
+                "roe": _f(f.get("roe")),
+                "profit_yoy": _f(f.get("ordinay_profit_yoy")),
+                "rev_yoy": 0.0,
+                "gross_margin": _f(f.get("grossprofit_margin")),
+                "debt_ratio": _f(f.get("debt_to_assets")),
+                "div_yield": _f(f.get("dividend_yield_ratio")) / 100,  # 百分数->小数
+                # 资金（快照层补）
+                "net_super": 0, "net_big": 0, "net_mid": 0, "net_small": 0,
+                "net_main5": 0, "net_main10": 0, "net_main20": 0,
+                "ddx1": 0, "in_out_ratio": None,
+            })
+        return out
+
+    # ---------- 快照（盘中级，缓存 5min） ----------
+    def snapshot(self, pool: List[Dict]) -> Optional[List[Dict]]:
+        if self.source != "Tushare":
+            return self._mock.snapshot(pool)
+
+        cached = cache.get("snapshot")
+        if cached:
+            return cached
+        try:
+            snap = self._snapshot(pool)
+            if snap:
+                cache.put("snapshot", snap)
+                return snap
+        except Exception as e:
+            self.error = f"快照失败：{e}"
+        # 失败 -> 过期缓存 / mock
+        stale = cache.get_stale("snapshot")
+        if stale:
+            return stale
+        return self._mock.snapshot(pool)
+
+    def _snapshot(self, pool: List[Dict]) -> List[Dict]:
+        pro = self.pro
+        today = datetime.now()
+        start = (today - timedelta(days=90)).strftime("%Y%m%d")
+        end = (today + timedelta(days=1)).strftime("%Y%m%d")
+        days = _last_open_days(pro, "SSE", start, end, n=1)
+        if not days:
+            raise RuntimeError("取不到最近交易日")
+        td = days[0]
+
+        db = pro.daily_basic(trade_date=td, fields=(
+            "ts_code,close,pre_close,pe,pe_ttm,pb,turnover_rate,volume_ratio,"
+            "total_mv,circ_mv,free_share,amount"
+        ))
+        if db is None or len(db) == 0:
+            raise RuntimeError(f"daily_basic({td}) 为空")
+        db_idx = {r["ts_code"]: r for _, r in db.iterrows()}
+
+        # 资金流（低积分常失败，try 降级 -> DDX/内外比用近似）
+        mf_idx = {}
+        try:
+            mf = pro.moneyflow(trade_date=td)
+            if mf is not None and len(mf) > 0:
+                for _, r in mf.iterrows():
+                    mf_idx[r["ts_code"]] = r
+        except Exception as e:
+            self.error = f"资金流降级（{e.__class__.__name__}）"
+
+        rows = []
         for p in pool:
             ts_code = p.get("ts_code")
             d = db_idx.get(ts_code, {})
-            price = _f(d.get("close")) or p.get("price", 0)
-            pre = _f(d.get("pre_close")) or price
-            chg = round((price / pre - 1) * 100, 2) if pre > 0 else 0.0
-            circ_mv_yi = _f(d.get("circ_mv")) / 1e8
-            free_share = _f(d.get("free_share"))
-            free_mv_yi = (free_share * price / 1e8) if free_share > 0 else circ_mv_yi
-            amount_yi = _f(d.get("amount")) / 1e8
+            close = _f(d.get("close")) or _f(p.get("price"))
+            pre = _f(d.get("pre_close"), close) or close
+            chg = round((close / pre - 1) * 100, 2) if pre > 0 else 0.0
+            free_sh = _f(d.get("free_share"))
+            free_mv = free_sh * close / 1e8 if free_sh > 0 else _f(d.get("circ_mv"))
+            amt = _f(d.get("amount")) / 1e8
 
             rec = dict(p)
             rec.update({
-                "price": price, "chg_pct": chg,
+                "price": close, "chg_pct": chg,
+                "vol_ratio": _f(d.get("volume_ratio"), rec.get("vol_ratio", 1.0)),
                 "turn": _f(d.get("turnover_rate")),
-                "vol_ratio": _f(d.get("volume_ratio"), p.get("vol_ratio", 1.0)),
-                "amount": amount_yi,
+                "amount": amt,
                 "total_mv": _f(d.get("total_mv")) / 1e8,
-                "circ_mv": circ_mv_yi,
-                "free_circ_mv": free_mv_yi,
-                "pb": _f(d.get("pb"), p.get("pb", 0)),
-                "pe_static": _f(d.get("pe"), p.get("pe_static", 0)),
-                "pe_ttm": _f(d.get("pe_ttm"), p.get("pe_ttm", 0)),
-                "pe_dyn": _f(d.get("pe_ttm"), p.get("pe_dyn", 0)),
+                "circ_mv": _f(d.get("circ_mv")) / 1e8,
+                "free_circ_mv": free_mv,
+                "pb": _f(d.get("pb"), rec.get("pb", 0)),
+                "pe_static": _f(d.get("pe"), rec.get("pe_static", 0)),
+                "pe_ttm": _f(d.get("pe_ttm"), rec.get("pe_ttm", 0)),
+                "pe_dyn": _f(d.get("pe_ttm"), rec.get("pe_dyn", 0)),
             })
 
-            m = mf_map.get(ts_code, {})
+            m = mf_idx.get(ts_code, {})
             super_net = _f(m.get("buy_elg_amount")) - _f(m.get("sell_elg_amount"))
             big_net = _f(m.get("buy_lg_amount")) - _f(m.get("sell_lg_amount"))
             mid_net = _f(m.get("buy_md_amount")) - _f(m.get("sell_md_amount"))
@@ -355,68 +385,82 @@ class DataSource:
             rec["net_mid"] = round(mid_net / 1e8, 2)
             rec["net_small"] = round(small_net / 1e8, 2)
 
-            # 内外比近似 = 主动买量 / 主动卖量 (moneyflow 无内外盘原始值)
+            # 内外比：moneyflow 无内外盘，用主动买卖量近似（低积分=None）
             buy_vol = sum(_f(m.get(k)) for k in
-                          ("buy_elg_vol", "buy_lg_vol", "buy_md_vol", "buy_sm_vol"))
+                          ["buy_elg_vol", "buy_lg_vol", "buy_md_vol", "buy_sm_vol"])
             sell_vol = sum(_f(m.get(k)) for k in
-                           ("sell_elg_vol", "sell_lg_vol", "sell_md_vol", "sell_sm_vol"))
+                           ["sell_elg_vol", "sell_lg_vol", "sell_md_vol", "sell_sm_vol"])
             rec["in_out_ratio"] = round(buy_vol / sell_vol, 2) if sell_vol > 0 else None
 
-            # DDX：moneyflow 无，用主力净额近似（后续可接东财资金流补真值）
-            main_net = super_net + big_net
-            rec["ddx1"] = round(main_net / 1e8, 2)
+            # DDX：接口无则近似
+            rec["ddx1"] = _f(m.get("ddx")) or round(big_net / 1e8 / max(free_mv, 1), 2) if free_mv else 0.0
 
-            # 主力增仓% 双口径（口径与 app.py compute_main_positions 一致）
-            rec["main_pos1"] = (round(main_net / 1e8 / free_mv_yi * 100, 2)
-                                if free_mv_yi else None)
-            rec["main_pos1_amt"] = (round(main_net / 1e8 / amount_yi * 100, 2)
-                                    if amount_yi else None)
-            # 5/10/20日：日频快照无历史，先置 None（后续按日缓存可补齐）
-            rec["main_pos5"] = rec["main_pos10"] = rec["main_pos20"] = None
-            rec["main_pos5_amt"] = rec["main_pos10_amt"] = rec["main_pos20_amt"] = None
+            # ---- 主力增仓% 双口径（真实公式）----
+            main_net = super_net + big_net  # 万元
+            rec["main_pos1"] = round(main_net / 1e8 / max(free_mv, 1e-6) * 100, 2) if free_mv else None
+            rec["main_pos1_amt"] = round(main_net / 1e8 / max(amt, 1e-6) * 100, 2) if amt else None
+            # 5/10/20 日：日频快照无历史，暂留 None（后续按股回看补充）
+            rec["main_pos5"] = None; rec["main_pos5_amt"] = None
+            rec["main_pos10"] = None; rec["main_pos10_amt"] = None
+            rec["main_pos20"] = None; rec["main_pos20_amt"] = None
             rows.append(rec)
         return rows
 
 
-# ==================== 自检 ====================
+# ==================================================================
+# 统一入口（app.py 只用这一个类）
+# ==================================================================
+class DataSource:
+    """
+    根据环境自动选择真实/Mock：
+        DataSource(pool=make_mock_pool(), use_real=None)
+        - use_real=None（默认）：有 token 且 tushare 可用 -> 真实，否则 Mock
+        - use_real=True  ：强制真实（无 token 也会降级 Mock 并记录 error）
+        - use_real=False ：强制 Mock（离线/调试用）
+    对外接口：source / error / get_pool() / snapshot(pool)
+    """
+
+    def __init__(self, pool: list = None, token: str = None, use_real: Optional[bool] = None):
+        self._mock_pool = pool
+        self.token = token or os.getenv("TUSHARE_TOKEN", "")
+        self.error = ""
+
+        if use_real is False:
+            self._impl = MockDataSource(pool=pool)
+            self.source = "MOCK"
+            return
+
+        # use_real=None -> 自动判断；True -> 强制尝试
+        real = TushareDataSource(pool=pool, token=self.token)
+        if real.source == "Tushare" and (use_real is True or bool(self.token)):
+            self._impl = real
+            self.source = "Tushare"
+        else:
+            self._impl = MockDataSource(pool=pool)
+            self.source = "MOCK"
+            self.error = real.error or "自动降级 Mock"
+
+    @property
+    def mode(self) -> str:
+        return self.source
+
+    def get_pool(self) -> List[Dict]:
+        return self._impl.get_pool()
+
+    def snapshot(self, pool: List[Dict]) -> List[Dict]:
+        return self._impl.snapshot(pool)
+
+
+# ==================== 独立测试 ====================
 if __name__ == "__main__":
-    print("=" * 60)
-    print("DataSource 自检")
-    print("=" * 60)
-
-    print("\n[1] 无 token -> 应自动降级 Mock，source=Mock")
-    ds = DataSource(pool=[], use_real=None)
-    print(f"    use_real={ds.use_real}, source={ds.source}, error={ds.error!r}")
+    print("TUSHARE_TOKEN loaded:", bool(os.getenv("TUSHARE_TOKEN")))
+    ds = DataSource(use_real=None)
+    print("mode:", ds.source, "| error:", ds.error)
     pool = ds.get_pool()
-    print(f"    get_pool() -> {len(pool)} 只 (mock)")
-
-    snap = ds.snapshot(pool if pool else [{"ts_code": "000001.SZ", "code": "000001", "price": 12.5, "circ_mv": 2200, "free_circ_mv": 1800}])
-    print(f"    snapshot() -> {len(snap) if snap else None} 行")
+    print("慢池数量:", len(pool))
+    if pool:
+        print("样例:", pool[0])
+    snap = ds.snapshot(pool[:20])
+    print("快照数量:", len(snap) if snap else 0)
     if snap:
-        r = snap[0]
-        print(f"    首行: code={r.get('code')} price={r.get('price')} "
-              f"内外比={r.get('in_out_ratio')} ddx1={r.get('ddx1')} "
-              f"main_pos1={r.get('main_pos1')} main_pos1_amt={r.get('main_pos1_amt')}")
-        print("    OK: Mock 快照可正常生成" if r.get("code") else "    FAIL")
-
-    print(f"\n[2] use_real=True 但无 token -> 应降级 Mock")
-    ds2 = DataSource(pool=[], use_real=True)
-    print(f"    use_real={ds2.use_real}, source={ds2.source} (期望 Mock)")
-
-    print(f"\n[3] 内外比/增仓% 公式校验 (用 mock 数据)")
-    sample = {"net_super": 1.0, "net_big": 0.5, "free_circ_mv": 1800, "amount": 5.0,
-              "code": "TEST", "name": "测试"}
-    # 复刻 app.py compute_main_positions 逻辑
-    net1 = sample["net_super"] + sample["net_big"]
-    free = sample["free_circ_mv"]
-    amt = sample["amount"]
-    main_pos1 = round(net1 / free * 100, 2) if free else None
-    main_pos1_amt = round(net1 / amt * 100, 2) if amt else None
-    print(f"    主力净额={net1}亿(示例), free_circ_mv={free}亿, amount={amt}亿")
-    print(f"    main_pos1(自由流通市值口径)={net1}/{free}*100={main_pos1}")
-    print(f"    main_pos1_amt(成交额口径)={net1}/{amt}*100={main_pos1_amt}")
-    assert main_pos1 == round(1.5 / 1800 * 100, 2), "自由流通市值口径公式错误"
-    assert main_pos1_amt == round(1.5 / 5.0 * 100, 2), "成交额口径公式错误"
-    print("    OK: 双口径公式一致")
-
-    print("\n自检完成.")
+        print("快照首行:", snap[0])

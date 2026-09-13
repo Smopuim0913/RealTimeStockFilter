@@ -595,14 +595,13 @@ def main():
 
     # ---- 会话状态: 持久化 ----
     if "ds" not in st.session_state:
-        # use_real=None ：有 TUSHARE_TOKEN 且 tushare 可用就走真实，否则 Mock
-        st.session_state.ds = DataSource(
-            pool=make_mock_pool(),
-            use_real=None,
-            mock_pool_fn=make_mock_pool,   # ← 新增：实盘失败时用这个生成 Mock 兜底
-        )
+        # 自动模式：有 TUSHARE_TOKEN 且 tushare 可用 -> 真实；否则 Mock
+        # .env 由 data_source.py 自动加载（需 pip install python-dotenv）
+        st.session_state.ds = DataSource(pool=make_mock_pool(), use_real=None)
+
     if "sim" not in st.session_state:
-        st.session_state.sim = MarketSimulator(make_mock_pool())
+        st.session_state.sim = MarketSimulator(make_mock_pool())  # 兜底兼容，实际已不用
+
     if "prev" not in st.session_state:
         st.session_state.prev = {}  # code -> row
     if "history" not in st.session_state:
@@ -617,25 +616,25 @@ def main():
     with header:
         # ① 先取数：pool 必须先有值
                 # ====== ① 先取数（pool 必须先赋值，才能展示/筛选）======
+        # ====== 先取数：pool / snapshot 必须先就绪 ======
         ds = st.session_state.ds
-        pool = make_mock_pool()          # 兜底默认值，保证 len(pool) 不报错
+        pool = make_mock_pool()      # 兜底默认，保证下面 len(pool) 不报错
         snapshot = None
-
         try:
-            real_pool = ds.get_pool()   # ① 季度慢池（真实 or Mock）
+            real_pool = ds.get_pool()
             if real_pool:
                 pool = real_pool
-            snapshot = ds.snapshot(pool)  # ② 盘中快照（真实 or None）
+            snapshot = ds.snapshot(pool)
         except Exception as e:
             print(f"[app] 真实数据源异常：{e}")
 
-        if not snapshot:                 # 兜底：走 Mock 快照
+        if not snapshot:
             snapshot = st.session_state.sim.snapshot()
 
-        # ====== ② 再展示（pool/snapshot 此刻一定已就绪）======
+        # ====== 再展示 ======
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 2])
         c1.metric("选中条件", f"{len(DEFAULT_ORDER)} 字段")
-        pool_size = len(pool)            # ✅ pool 之前已赋值
+        pool_size = len(pool)        # ✅ 此时 pool 已定义
         c2.metric("季度慢池", pool_size)
         selected = fast_filter(snapshot, params)
         prev_map = st.session_state.prev
@@ -646,14 +645,17 @@ def main():
         c3.metric("当前入选", len(selected), delta=f"+{len(entered)}")
         c4.metric("本轮回局", len(exited), delta=f"-{len(exited)}" if exited else None)
 
-        # ====== ③ 右上角数据来源标签（真实/降级原因可见）======
-        src = getattr(ds, "source", "Mock")
-        err = getattr(ds, "error", "")
-        label = "Tushare 真实" if src == "Tushare" else "MOCK 模拟"
+        # ---- 数据来源：真实则显示 Tushare，否则显示降级原因 ----
+        src = getattr(ds, "source", "MOCK")
+        if src == "Tushare":
+            src_label = "Tushare 真实"
+        else:
+            err = getattr(ds, "error", "") or "未启用真实数据"
+            src_label = f"MOCK 模拟 · 降级原因: {err}"
         c5.write(
             f"**最后更新**: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"下一轮 {refresh_rate}s  ·  数据: {label}"
-            + (f"  ·  降级原因: {err}" if err else "")
+            f"下一轮 {refresh_rate}s  ·  "
+            f"涨停色=涨/红  ·  数据: {src_label}"
         )
 
     # ---- 进出局事件流 ----
