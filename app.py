@@ -22,6 +22,7 @@ from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
+from data_source import DataSource
 
 # ------------------------------------------------------------------
 # 1. 字段元配置 (决定: 列宽 / 小数位 / 对齐 / 格式化)
@@ -266,8 +267,8 @@ STRENGTH_RANK = {"strong": 5, "mid_strong": 4, "mid": 3, "mid_weak": 2, "weak": 
 # 默认参数: 宽松优先, 保证有结果, 用户再逐步收紧
 DEFAULT_PARAMS = {
     "price_max": 50,
-    "in_out_ratio_max": 1.0,
-    "vol_ratio_min": 1.0,
+    "in_out_ratio_max": 3.5,
+    "vol_ratio_min": 0.6,
     "turn_min": 0.33,
     "amount_min": 0.0,
     "ddx1_min": -1.0,
@@ -518,8 +519,8 @@ def main():
 
         st.subheader("行情")
         price_max = st.number_input("股价小于(元)", 1, 5000, 50)
-        in_out_ratio_max = st.number_input("内外比小于", 0.0, 5.0, 1.0, 0.1)
-        vol_ratio_min = st.number_input("量比大于", 0.0, 10.0, 1.0, 0.1)
+        in_out_ratio_max = st.number_input("内外比小于", 0.0, 5.0, 3.5, 0.1)
+        vol_ratio_min = st.number_input("量比大于", 0.0, 10.0, 0.6, 0.1)
         turn_min = st.number_input("换手率大于%", 0.0, 20.0, 0.33, 0.1)
         amount_min = st.number_input("总金额大于(亿)", 0.0, 1000.0, 0.0, 0.5)
 
@@ -593,8 +594,11 @@ def main():
     }
 
     # ---- 会话状态: 持久化 ----
+    if "ds" not in st.session_state:
+        # use_real=True 时接真实数据；token 从环境变量取
+        st.session_state.ds = DataSource(pool=make_mock_pool())
     if "sim" not in st.session_state:
-        st.session_state.sim = MarketSimulator(make_mock_pool())
+        st.session_state.sim = MarketSimulator(make_mock_pool())  # 保留兼容，不再使用
     if "prev" not in st.session_state:
         st.session_state.prev = {}  # code -> row
     if "history" not in st.session_state:
@@ -607,12 +611,27 @@ def main():
     # ---- 顶部状态栏 ----
     header = st.container()
     with header:
+        # ====== 先取数（pool 必须先赋值，才能展示/筛选）======
+        ds = st.session_state.ds
+        pool = make_mock_pool()                 # 兜底默认值：先给 pool 一个值
+        snapshot = None
+
+        try:
+            real_pool = ds.get_pool()           # ① 季度慢池（真实 or MOCK）
+            if real_pool:
+                pool = real_pool
+            snapshot = ds.snapshot(pool)        # ② 盘中快照（真实 or MOCK）
+        except Exception as e:
+            print(f"[app] 真实数据源异常：{e}")   # 异常也不影响，走下面兜底
+
+        if not snapshot:                        # 兜底：保留原 MOCK 逻辑
+            snapshot = st.session_state.sim.snapshot()
+
+        # ====== 取数完成，再做顶部指标展示 ======
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 2])
         c1.metric("选中条件", f"{len(DEFAULT_ORDER)} 字段")
-        pool_size = len(make_mock_pool())
+        pool_size = len(pool)                   # ✅ 此时 pool 一定有值
         c2.metric("季度慢池", pool_size)
-        # 本轮快照
-        snapshot = st.session_state.sim.snapshot()
         selected = fast_filter(snapshot, params)
         prev_map = st.session_state.prev
         curr_codes = {r["code"] for r in selected}
