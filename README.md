@@ -115,6 +115,12 @@
 - Windows / macOS：去 [python.org](https://www.python.org/downloads/) 下载安装，**勾选「Add to PATH」**
 - Linux：`sudo apt install python3 python3-pip`
 
+* 配置国内git源
+```bash
+pip config set global.index-url http://mirrors.aliyun.com/pypi/simple/
+pip config set global.trusted-host mirrors.aliyun.com
+```
+
 **2. 下载本项目**
 ```bash
 git clone https://github.com/Smopuim0913/RealTimeStockFilter.git
